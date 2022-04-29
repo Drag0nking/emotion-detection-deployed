@@ -1,0 +1,192 @@
+{% extends 'base.html' %} {% load static %} {% block content %}
+<head>
+  <title></title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+</head>
+<body>
+  <header>
+    <i class="fas fa-camera"></i>
+  </header>
+
+  <video
+    id="video"
+    class="border"
+  
+  ></video>
+  <canvas
+    id="output"
+    class="canvas-output"
+    style="background-color:rgba(0,0,0,0); position: absolute; top: 0px; left: 0px;"
+	
+  ></canvas>
+  <button
+  onclick="startFeed()"
+  style="display:none;background-color: #1af030"
+  id="startFeedButton"
+>
+  Start feed
+</button>
+<button
+  onclick="stopFeed()"
+  style="display:block; background-color: #ff4040"
+  id="stopFeedButton"
+>
+  Stop feed
+</button>
+</br> 
+
+<form id="formId" method="post">{% csrf_token %}
+
+  <input type="hidden" id="usrMood" name="usrMood" value="">
+ 
+</form>
+
+</body>
+<script
+  src="https://code.jquery.com/jquery-3.6.0.js"
+  integrity="sha256-H+K7U5CnXl1h5ywQfKtSj8PCmoN9aaq30gDh27Xc0jk="
+  crossorigin="anonymous"
+></script>
+<script>
+  var model,timer, mask_model, ctx, videoWidth, videoHeight, canvas, stream;
+  let emotions = ["anger", "disgust", "happy", "neutral", "sad", "surprised"];
+  let score=[0,0,0,0,0,0];
+  const video = document.getElementById("video");
+  const state = {
+    backend: "webgl",
+  };
+
+  async function setupCamera() {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: "user" },
+    });
+    
+    video.srcObject = stream;
+    return new Promise((resolve) => {
+      video.onloadedmetadata = () => {
+        resolve(video);
+      };
+    });
+
+   
+  }
+
+  function recommendSong(){
+    stopFeed();
+    
+    const m=Math.max(...score);
+    const em=score.indexOf(m);
+    let usrMood=emotions[em];
+    console.log(usrMood);
+    document.getElementById("usrMood").value = usrMood;
+    document.getElementById("formId").submit();
+   
+  }
+
+  function stopFeed() {
+    clearTimeout(timer)
+    stream.getTracks().forEach((track) => track.stop());
+    document.getElementById("startFeedButton").style.display = "block";
+    document.getElementById("stopFeedButton").style.display = "none";
+  }
+  function startFeed() {
+    setupPage();
+    document.getElementById("startFeedButton").style.display = "none";
+    document.getElementById("stopFeedButton").style.display = "block";
+  }
+
+  const renderPrediction = async () => {
+    tf.engine().startScope();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    //estimatefaces model takes in 4 parameter (1) video, returnTensors, flipHorizontal, and annotateBoxes
+    const predictions = await model.estimateFaces(video, true, false, false);
+
+    // const offset = tf.scalar(127.5);
+
+    //check if prediction length is more than 0
+    if (predictions.length > 0) {
+      //clear context
+
+      for (let i = 0; i < predictions.length; i++) {
+        var text = "";
+        var start = predictions[i].topLeft.arraySync();
+        var end = predictions[i].bottomRight.arraySync();
+        var size = [end[0] - start[0], end[1] - start[1]];
+        if (videoWidth < end[0] && videoHeight < end[0]) {
+          console.log("image out of frame");
+          continue;
+        }
+
+        var inputImage = tf.browser.fromPixels(video).toFloat();
+        // inputImage = inputImage.sub(offset).div(offset);
+        // console.log([parseInt(size[1]),parseInt(size[0]),3])
+
+        inputImage = inputImage.slice(
+          [parseInt(start[1]), parseInt(start[0])],
+          [parseInt(size[1]), parseInt(size[0])]
+        );
+        inputImage = inputImage.mean(2).expandDims(0).expandDims(-1);
+
+        inputImage = inputImage
+          .resizeBilinear([48, 48])
+          .reshape([1, 48, 48, 1]);
+
+        result = mask_model.predict(inputImage).dataSync();
+        result = Array.from(result);
+       
+        const max = Math.max(...result);
+
+        const index = result.indexOf(max);
+
+        ctx.beginPath();
+
+        ctx.strokeStyle = "red";
+        ctx.fillStyle = "red";
+
+        text = "" + emotions[index];
+        score[index]++;
+        ctx.lineWidth = "4";
+        ctx.rect(start[0], start[1], size[0], size[1]);
+        ctx.stroke();
+        ctx.font = "bold 15pt sans-serif";
+        ctx.fillText(text, start[0] + 5, start[1] + 20);
+      }
+    }
+    //update frame
+    requestAnimationFrame(renderPrediction);
+    tf.engine().endScope();
+  };
+
+  const setupPage = async () => {
+    await setupCamera();
+    await tf.setBackend(state.backend);
+
+    video.play();
+
+    videoWidth = video.videoWidth;
+    videoHeight = video.videoHeight;
+    video.width = videoWidth;
+    video.height = videoHeight;
+
+    canvas = document.getElementById("output");
+    canvas.width = videoWidth;
+    canvas.height = videoHeight;
+    ctx = canvas.getContext("2d");
+    ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
+
+    model = await blazeface.load();
+
+    mask_model = await tf.loadLayersModel('{% static "model.json" %}');
+    timer=setTimeout( function() {
+      recommendSong();
+   }, 5000 );
+    renderPrediction();
+  };
+  
+  setupPage();
+ 
+</script>
+
+{% endblock %}
